@@ -17,7 +17,7 @@ kind: Service
 metadata:
   annotations:
     run.googleapis.com/launch-stage: ALPHA
-  name: monitoring-fetch-aws-metrics-118
+  name: fetch-aws-metrics-17
 spec:
   template:
     metadata:

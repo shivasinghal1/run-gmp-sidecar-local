@@ -30,12 +30,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-type PubSubMessage struct {
-	Data       string            `json:"data"`
-	Attributes map[string]string `json:"attributes"`
-}
-
 // Collector that contains the descriptors for the metrics from the app.
+// Foo is a gauge with no labels. Bar is a counter with no labels.
 type fooBarCollector struct {
 	avgDuration          *prometheus.Desc
 	errRate              *prometheus.Desc
@@ -49,32 +45,31 @@ func newFooBarCollector() *fooBarCollector {
 	return &fooBarCollector{
 		avgDuration: prometheus.NewDesc("avg_duration",
 			"Average duration of the lambda.",
-			nil, nil,
+			[]string{"awsAccountId", "timeCreated", "tenantProjectId"}, nil,
 		),
 		errRate: prometheus.NewDesc("err_rate",
 			"Err rate for the lambda (count of errors/invocations).",
-			nil, nil,
+			[]string{"awsAccountId", "timeCreated", "tenantProjectId"}, nil,
 		),
 		failedScansCount: prometheus.NewDesc("failed_scans_count",
 			"Count of failed scans over the last 24 hours.",
-			nil, nil,
+			[]string{"awsAccountId", "timeCreated", "tenantProjectId"}, nil,
 		),
 		maxMemUsed: prometheus.NewDesc("max_mem_used",
 			"Max memory used by the lambda (in MB).",
-			nil, nil,
+			[]string{"awsAccountId", "timeCreated", "tenantProjectId"}, nil,
 		),
 		reportsReceivedCount: prometheus.NewDesc("reports_received_count",
 			"Count of reports received over the last 24 hours.",
-			nil, nil,
+			[]string{"awsAccountId", "timeCreated", "tenantProjectId"}, nil,
 		),
 		scannersCreatedCount: prometheus.NewDesc("scanners_created_count",
 			"Scanners created over the last 24 hours.",
-			nil, nil,
+			[]string{"awsAccountId", "timeCreated", "tenantProjectId"}, nil,
 		),
 	}
 }
 
-// Each and every collector must implement the Describe function.
 // It essentially writes all descriptors to the prometheus desc channel.
 func (collector *fooBarCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- collector.avgDuration
@@ -89,8 +84,8 @@ func (collector *fooBarCollector) Describe(ch chan<- *prometheus.Desc) {
 func (collector *fooBarCollector) Collect(ch chan<- prometheus.Metric) {
 	log.Printf("entered fooBarCollector collector ")
 	projectID := "ctd-pi-ads-mgmt-prod"
-	// subID := "pull-ads-monitoring-bucket-prod-notification-sub"
-	subID := "temp-sub-2"
+	subID := "pull-ads-monitoring-bucket-prod-notification-sub"
+	// subID := "temp-sub-2"
 	ctx := context.Background()
 	client, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
@@ -102,110 +97,133 @@ func (collector *fooBarCollector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	log.Printf("created Pub/Sub client Subscription successfully")
-	messageReceived := 0
 
-	for messageReceived < 5 {
-		log.Printf("Pub/Sub calling for receiving message")
-		err = sub.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
-			log.Printf("Pub/Sub msgData: %s", msg.Data)
-			var jsonObject map[string]interface{}
-			err = json.Unmarshal(msg.Data, &jsonObject)
-			if err != nil {
-				return
-			}
-			log.Printf("Pub/Sub jsonObject: %s", jsonObject)
-			name, ok := jsonObject["name"].(string)
-			if !ok || !strings.HasPrefix(name, "metrics/") {
-				return
-			}
-
-			bucket, ok := jsonObject["bucket"].(string)
-			if !ok {
-				return
-			}
-
-			// tenantprojectid, ok := msg.Attributes["tenantprojectid"]
-			// if !ok {
-			// 	return
-			// }
-			// // log.Printf("Hello, registry is here %s!", registry)
-			// groupingKey := map[string]string{
-			// 	"tenantProjectId": tenantprojectid,
-			// }
-
-			storageClient, err := storage.NewClient(ctx)
-			if err != nil {
-				log.Fatalf("Failed to create client: %v", err)
-			}
-			defer storageClient.Close()
-
-			obj := storageClient.Bucket(bucket).Object(name)
-
-			rc, err := obj.NewReader(ctx)
-			if err != nil {
-				log.Fatalf("Failed to create object reader: %v", err)
-			}
-			defer rc.Close()
-
-			jsondata, err := io.ReadAll(rc)
-			if err != nil {
-				log.Fatalf("Failed to create object content: %v", err)
-			}
-
-			log.Printf("Pub/Sub file jsondata: %s", jsondata)
-
-			var jsonArray []map[string]interface{}
-			err = json.Unmarshal(jsondata, &jsonArray)
-			if err != nil {
-				return
-			}
-			var metricFields = [6]*prometheus.Desc{collector.avgDuration, collector.errRate, collector.failedScansCount, collector.maxMemUsed, collector.reportsReceivedCount, collector.scannersCreatedCount}
-			metricFieldsIndex := 0
-			for _, currObject := range jsonArray {
-				currObjectName, ok := currObject["name"].(string)
-				if !ok || strings.HasPrefix(currObjectName, "go") || (strings.HasPrefix(currObjectName, "process")) {
-					continue
-				}
-				currObjectType, ok := currObject["type"].(float64)
-				if !ok {
-					continue
-				}
-
-				currObjectMetric, ok := currObject["metric"].([]interface{})
-				if !ok {
-					continue
-				}
-
-				if int(currObjectType) == 1 {
-
-					gaugeObject, ok := currObjectMetric[0].(map[string]interface{})["gauge"].(map[string]interface{})
-					if !ok {
-						continue
-					}
-
-					currObjectValue, ok := gaugeObject["value"].(float64)
-					if !ok {
-						continue
-					}
-					log.Printf("registering fooBarCollector collector %v ", currObjectName)
-					log.Printf("values are going to channel ")
-					ch <- prometheus.MustNewConstMetric(metricFields[metricFieldsIndex], prometheus.GaugeValue, currObjectValue)
-					log.Printf("values parsed to channel successfully")
-					log.Printf("registered fooBarCollector collector %v ", currObjectName)
-					log.Printf("Pub/Sub file currObjectName: %v", currObjectName)
-					log.Printf("Pub/Sub file currObjectValue: %v", currObjectValue)
-					log.Printf("Pub/Sub file gaugeObject: %v", gaugeObject)
-					metricFieldsIndex++
-				}
-			}
-			log.Printf("Message is ack successfully")
-			msg.Ack() // Acknowledge the message
-		})
-
+	log.Printf("Pub/Sub calling for receiving message")
+	err = sub.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
+		log.Printf("Pub/Sub msgData: %s", msg.Data)
+		var jsonObject map[string]interface{}
+		err = json.Unmarshal(msg.Data, &jsonObject)
 		if err != nil {
-			log.Printf("error encountered while recieveing message from pub/sub")
-			log.Fatal(err)
+			return
 		}
+		log.Printf("Pub/Sub unmarshelled jsonObject: %s", jsonObject)
+		name, ok := jsonObject["name"].(string)
+		if !ok {
+			return
+		}
+		// name = <ACCOUNTID>/health/metrics.json
+		nameParts := strings.Split(name, "/")
+		log.Printf("nameParts %s", nameParts)
+
+		if len(nameParts) != 3 {
+			log.Printf("Message name %s len was not equal to 3 hence message is ack and no op", name)
+			msg.Ack() // Acknowledge the message
+			return
+		}
+		metricsFileName := nameParts[2]
+		accountId := nameParts[0]
+		metricsFileNamePrefix := "metrics-" + accountId
+		log.Printf("metricsFileName %s accountId %s metricsFileName %s", metricsFileName, accountId, metricsFileNamePrefix)
+		if !strings.HasPrefix(metricsFileName, metricsFileNamePrefix) {
+			log.Printf("Message name %s was not as per required format hence message is ack and no op", name)
+			msg.Ack() // Acknowledge the message
+			return
+		}
+
+		bucket, ok := jsonObject["bucket"].(string)
+		if !ok {
+			return
+		}
+		if strings.HasPrefix(bucket, "f7c82d8e1fef74d3e-tp") {
+			msg.Ack()
+			return
+		}
+		timeCreated := strings.Split(jsonObject["timeCreated"].(string), ".")[0]
+
+		storageClient, err := storage.NewClient(ctx)
+		if err != nil {
+			log.Fatalf("Failed to create client: %v", err)
+		}
+		defer storageClient.Close()
+
+		obj := storageClient.Bucket(bucket).Object(name)
+
+		rc, err := obj.NewReader(ctx)
+		if err != nil {
+			log.Printf("Failed to create object reader: %v", err)
+			if strings.Contains(err.Error(), "storage: object doesn't exist") {
+				log.Printf("Failed to create reader for jsonObject %s", jsonObject)
+				msg.Ack()
+				return
+			}
+			log.Printf("Failed to create reader for jsonObject %s", jsonObject)
+			msg.Ack()
+			return
+		}
+		// defer rc.Close()
+
+		jsondata, err := io.ReadAll(rc)
+		if err != nil {
+			log.Fatalf("Failed to create object content: %v", err)
+		}
+
+		log.Printf("Pub/Sub file jsondata: %s", jsondata)
+
+		var jsonArray []map[string]interface{}
+		err = json.Unmarshal(jsondata, &jsonArray)
+		if err != nil {
+			return
+		}
+		var metricFields = [6]*prometheus.Desc{collector.avgDuration, collector.errRate, collector.failedScansCount, collector.maxMemUsed, collector.reportsReceivedCount, collector.scannersCreatedCount}
+		metricFieldsIndex := 0
+		for _, currObject := range jsonArray {
+			currObjectName, ok := currObject["name"].(string)
+			if !ok || strings.HasPrefix(currObjectName, "go") || (strings.HasPrefix(currObjectName, "process")) {
+				continue
+			}
+			currObjectType, ok := currObject["type"].(float64)
+			if !ok {
+				continue
+			}
+
+			currObjectMetric, ok := currObject["metric"].([]interface{})
+			if !ok {
+				continue
+			}
+
+			if int(currObjectType) == 1 {
+
+				gaugeObject, ok := currObjectMetric[0].(map[string]interface{})["gauge"].(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				currObjectValue, ok := gaugeObject["value"].(float64)
+				if !ok {
+					continue
+				}
+				log.Printf("registering fooBarCollector collector %v ", currObjectName)
+				log.Printf("values are going to channel ")
+				labelValues := make([]string, 3)
+				labelValues[0] = "_" + accountId
+				labelValues[1] = timeCreated
+				labelValues[2] = strings.Split(bucket, "-")[0]
+				ch <- prometheus.MustNewConstMetric(metricFields[metricFieldsIndex], prometheus.GaugeValue, currObjectValue, labelValues...)
+				log.Printf("values parsed to channel successfully")
+				log.Printf("registered fooBarCollector collector %v ", currObjectName)
+				log.Printf("Pub/Sub file currObjectName: %v", currObjectName)
+				log.Printf("Pub/Sub file currObjectValue: %v", currObjectValue)
+				log.Printf("Pub/Sub file gaugeObject: %v", gaugeObject)
+				metricFieldsIndex++
+			}
+		}
+		log.Printf("Message is ack successfully")
+		msg.Ack() // Acknowledge the message
+	})
+
+	if err != nil {
+		log.Printf("error encountered while recieveing message from pub/sub")
+		log.Fatal(err)
 	}
 
 	log.Printf("values parsed to channel successfully")

@@ -13,3 +13,19 @@
 # limitations under the License.
 
 # <== Enter custom agent configurations in this file.
+apiVersion: monitoring.googleapis.com/v1beta
+kind: RunMonitoring
+metadata:
+  name: my-custom-cloud-run-job
+spec:
+  endpoints:
+  - port: 8080
+    path: /metrics
+    interval: 50s
+    timeout: 50s
+    # metricRelabeling:
+    # - action: replace
+    #   sourceLabels:
+    #   - service_name
+    #   targetLabel: label_key
+    #   replacement: ''
